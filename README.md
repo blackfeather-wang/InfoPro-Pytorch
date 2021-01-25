@@ -38,7 +38,7 @@ If you find this work valuable or use our code in your own research, please cons
 
 ## Get Started
 
-Please go to the folder [Experiments on CIFAR-SVHN-STL10](), [Experiments on ImageNet]() and [Semantic segmentation]() for specific docs.
+Please go to the folder [Experiments on CIFAR-SVHN-STL10](https://github.com/blackfeather-wang/InfoPro-Pytorch/tree/main/Experiments%20on%20CIFAR-SVHN-STL10), [Experiments on ImageNet](https://github.com/blackfeather-wang/InfoPro-Pytorch/tree/main/Experiments%20on%20ImageNet) and [Semantic segmentation](https://github.com/blackfeather-wang/InfoPro-Pytorch/tree/main/Semantic%20segmentation) for specific docs.
 
 
 ## Results
