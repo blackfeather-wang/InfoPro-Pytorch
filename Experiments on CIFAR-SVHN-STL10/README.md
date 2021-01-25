@@ -8,7 +8,7 @@
 
 ## Run
 
-- Please see [comand.sh]() for all the commands.
+- Please see [comand.sh](https://github.com/blackfeather-wang/InfoPro-Pytorch/blob/main/Experiments%20on%20CIFAR-SVHN-STL10/comand.sh) for all the commands.
 
 Train ResNet-110 + InfoPro on CIFAR-10
 
