@@ -1,5 +1,6 @@
 import argparse
 import os
+
 import random
 import shutil
 import time
@@ -16,17 +17,21 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-
-import numpy as np
-import networks.resnet
-import networks.densenet
-from ISDA_imagenet import ISDALoss
 import math
+import numpy as np
+
+import networks.resnet
 
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('data', metavar='DIR',
-                    help='path to dataset')
+parser.add_argument('data', metavar='DIR', help='path to dataset')
+
+parser.add_argument('--arch', default='resnet', type=str)
+parser.add_argument('--net', default='resnet101', type=str,
+                    help='networks: [resnet101|resnet152|resnext101_32x8d]')
+parser.add_argument('--pre-train', default='', type=str, metavar='PATH',
+                    help='path to the pre-train model (default: none)')
+
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
@@ -49,16 +54,20 @@ parser.add_argument('-p', '--print-freq', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
+
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
+
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                     help='use pre-trained model')
 parser.add_argument('--world-size', default=-1, type=int,
                     help='number of nodes for distributed training')
 parser.add_argument('--rank', default=-1, type=int,
                     help='node rank for distributed training')
-parser.add_argument('--dist-url', default='tcp://224.66.41.62:23456', type=str,
+parser.add_argument('--dist-url', default='tcp://127.0.0.1:29500', type=str,
                     help='url used to set up distributed training')
+# parser.add_argument('--dist-url', default="env://", type=str,
+#                     help='url used to set up distributed training')
 parser.add_argument('--dist-backend', default='nccl', type=str,
                     help='distributed backend')
 parser.add_argument('--seed', default=None, type=int,
@@ -70,16 +79,11 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
-parser.add_argument('--lambda_0', default=7.5, type=float,
-                    help='The hyper-parameter \lambda_0 for ISDA, select from {1, 2.5, 5, 7.5, 10}. '
-                         'We adopt 1 for DenseNets and 7.5 for ResNets and ResNeXts, except for using 5 for ResNet-101.')
-parser.add_argument('--model', default='resnet50', type=str,
-                    help='Model to be trained. '
-                         'Select from resnet{18, 34, 50, 101, 152} / resnext{50_32x4d, 101_32x8d} / '
-                         'densenet{121, 169, 201, 265}')
-parser.add_argument('--pre-train', default='', type=str, metavar='PATH',
-                    help='path to the pre-train model (default: none)')
 
+parser.add_argument('--train_url', default='./outputs/', type=str)
+
+parser.add_argument('--ixx_r', type=float, default=0,)
+parser.add_argument('--ixy_r', type=float, default=1,)
 
 best_acc1 = 0
 acc_list = []
@@ -87,6 +91,8 @@ acc_list = []
 
 def main():
     args = parser.parse_args()
+
+    args.multiprocessing_distributed = True
 
     if args.seed is not None:
         random.seed(args.seed)
@@ -136,27 +142,14 @@ def main_worker(gpu, ngpus_per_node, args):
             args.rank = args.rank * ngpus_per_node + gpu
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
-    # create model
-    if 'res' in args.model:
-        model = eval('networks.resnet.' + args.model)()
-    elif 'dense' in args.model:
-        model = eval('networks.densenet.' + args.model)()
-    else:
-        print('Please select the model from resnet{18, 34, 50, 101, 152} / '
-              'resnext{50_32x4d, 101_32x8d} / densenet{121, 169, 201, 265}')
+
+    model = eval('networks.' + args.arch + '.' + args.net)()
+
+    print(model)
 
     if args.pre_train:
         pre_train_model = torch.load(args.pre_train)
         model.load_state_dict(pre_train_model)
-
-    feature_num = model.feature_num
-    
-    print('Number of final features: {}'.format(
-        int(model.feature_num))
-    )
-    print('Number of model parameters: {}'.format(
-        sum([p.data.nelement() for p in model.parameters()])
-    ))
 
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
@@ -170,7 +163,8 @@ def main_worker(gpu, ngpus_per_node, args):
             # ourselves based on the total number of GPUs we have
             args.batch_size = int(args.batch_size / ngpus_per_node)
             args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
-            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu],
+                                                              find_unused_parameters=True)
         else:
             model.cuda()
             # DistributedDataParallel will divide and allocate batch_size to all
@@ -188,13 +182,13 @@ def main_worker(gpu, ngpus_per_node, args):
             model = torch.nn.DataParallel(model).cuda()
 
     # define loss function (criterion) and optimizer
-    # criterion = nn.CrossEntropyLoss().cuda(args.gpu)
-    criterion_isda = ISDALoss(feature_num, 1000).cuda(args.gpu)
+
     criterion_ce = nn.CrossEntropyLoss().cuda(args.gpu)
 
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+                                weight_decay=args.weight_decay,
+                                nesterov=True)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -211,9 +205,19 @@ def main_worker(gpu, ngpus_per_node, args):
             if args.gpu is not None:
                 # best_acc1 may be from a checkpoint from a different GPU
                 best_acc1 = best_acc1.to(args.gpu)
-            model.load_state_dict(checkpoint['state_dict'])
+
+            # from collections import OrderedDict
+            # dict = OrderedDict()
+            state_dict = checkpoint['state_dict']
+            for k, v in state_dict.items():
+                # print(k)
+                # print(v.size())
+                if 'weight_sigma' in k:
+                    print(k)
+                    state_dict[k] = v.view(1)
+
+            model.load_state_dict(state_dict)
             optimizer.load_state_dict(checkpoint['optimizer'])
-            criterion_isda =  checkpoint['criterion_isda']
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
@@ -263,12 +267,9 @@ def main_worker(gpu, ngpus_per_node, args):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
-        
-        print('\lambda_0: {}'.format(args.lambda_0))
-        print('\lambda_now: {}'.format(args.lambda_0 * (epoch / args.epochs)))
 
         # train for one epoch
-        train(train_loader, model, criterion_isda, optimizer, epoch, args)
+        train(train_loader, model, criterion_ce, optimizer, epoch, args)
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion_ce, args)
@@ -276,18 +277,18 @@ def main_worker(gpu, ngpus_per_node, args):
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
-
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank % ngpus_per_node == 0):
+                                                    and args.rank % ngpus_per_node == 0):
             acc_list.append(acc1)
-            np.savetxt('./accuracy.txt', np.array(acc_list))
+            acc_file = args.train_url + 'accuracy.txt'
+            np.savetxt(acc_file, np.array(acc_list))
+
             save_checkpoint({
                 'epoch': epoch + 1,
                 'state_dict': model.state_dict(),
                 'best_acc1': best_acc1,
                 'optimizer': optimizer.state_dict(),
-                'criterion_isda': criterion_isda,
-            }, is_best)
+            }, is_best, filename=args.train_url + 'checkpoint.pth.tar')
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
@@ -301,6 +302,19 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         [batch_time, data_time, losses, top1, top5],
         prefix="Epoch: [{}]".format(epoch))
 
+    mask_train_mean = torch.Tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).expand(
+        args.batch_size, 3, 224, 224
+    ).cuda(args.gpu)
+
+    mask_train_std = torch.Tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).expand(
+        args.batch_size, 3, 224, 224
+    ).cuda(args.gpu)
+
+    def _image_restore(normalized_image):
+        return normalized_image.mul(mask_train_std[:normalized_image.size(0)]
+                                    ) + mask_train_mean[:normalized_image.size(0)]
+
+
     # switch to train mode
     model.train()
 
@@ -313,22 +327,30 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             images = images.cuda(args.gpu, non_blocking=True)
         target = target.cuda(args.gpu, non_blocking=True)
 
-        # compute output
-        # output = model(images)
-        # loss = criterion(output, target)
-        
-        loss, output = criterion(model, images, target, args.lambda_0 * (epoch / args.epochs))
+        optimizer.zero_grad()
+        inter_feat, inter_loss = model(x=images,
+                                       initial_image=_image_restore(images),
+                                       target=target,
+                                       criterion=criterion,
+                                       layer_wise=0,
+                                       ixx_r=args.ixx_r,
+                                       ixy_r=args.ixy_r,)
+
+        with model.no_sync():
+            inter_loss.backward()
+
+        output, loss = model(x=inter_feat.detach(),
+                             target=target,
+                             criterion=criterion,
+                             layer_wise=1,)
+        loss.backward()
+        optimizer.step()
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), images.size(0))
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
-
-        # compute gradient and do SGD step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -390,6 +412,7 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
+
     def __init__(self, name, fmt=':f'):
         self.name = name
         self.fmt = fmt
@@ -445,11 +468,11 @@ def accuracy(output, target, topk=(1,)):
 
         _, pred = output.topk(maxk, 1, True, True)
         pred = pred.t()
-        correct = pred.eq(target.view(1, -1).expand_as(pred))
+        correct = pred.eq(target.reshape(1, -1).expand_as(pred))
 
         res = []
         for k in topk:
-            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)  # Pytorch 1.7
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
