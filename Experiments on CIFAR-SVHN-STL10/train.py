@@ -285,12 +285,10 @@ def train(train_loader, model, optimizer, epoch):
     for i, (x, target) in enumerate(train_loader):
         target = target.cuda()
         x = x.cuda()
-        input_var = torch.autograd.Variable(x)
-        target_var = torch.autograd.Variable(target)
 
         optimizer.zero_grad()
-        output, loss = model(img=input_var,
-                             target=target_var,
+        output, loss = model(img=x,
+                             target=target,
                              ixx_1=args.ixx_1,
                              ixy_1=args.ixy_1,
                              ixx_2=args.ixx_2,
