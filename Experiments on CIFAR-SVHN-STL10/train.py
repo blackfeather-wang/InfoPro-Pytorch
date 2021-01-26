@@ -17,7 +17,7 @@ import torchvision.transforms as transforms
 
 import networks.resnet
 
-parser = argparse.ArgumentParser(description='PyTorch WideResNet Training')
+parser = argparse.ArgumentParser(description='InfoPro-PyTorch')
 parser.add_argument('--dataset', default='cifar10', type=str,
                     help='dataset: [cifar10|stl10|svhn]')
 
